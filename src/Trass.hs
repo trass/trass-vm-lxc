@@ -2,17 +2,21 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Trass where
 
+import Data.List
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Yaml
 
 import Control.Applicative
 import Control.Monad.IO.Class
+import Control.Concurrent
 
 import System.LXC
 import System.Exit
-import System.Unix.Directory
+import System.Process
+import System.Unix.Directory (withTemporaryDirectory)
 import System.Posix.Files
+import System.Posix.IO (handleToFd)
 
 data TrassConfig = TrassConfig
   { trassConfigDownload         :: String
@@ -60,8 +64,18 @@ attachMany (cmd:cmds) = do
     Just ExitSuccess -> attachMany cmds
     _ -> return mc
 
-prepareContainer :: String -> TrassConfig -> IO (Maybe Container)
-prepareContainer name TrassConfig{..} = do
+copyToContainer :: FilePath -> FilePath -> LXC ()
+copyToContainer hostPath containerPath = do
+  outFd <- liftIO $ do
+    (_, Just hout, _, _) <- createProcess (proc "tar" ["zcf", "-", hostPath]){ std_out = CreatePipe }
+    handleToFd hout
+  attachRunWait
+    defaultAttachOptions { attachStdinFD = outFd }
+    "sh" ["sh", "-c", "tar zxf - -O >" ++ containerPath]
+  return ()
+
+prepareContainer :: String -> TrassConfig -> FilePath -> FilePath -> IO (Maybe Container)
+prepareContainer name TrassConfig{..} hostPath containerPath = do
   let c = Container name Nothing
   withContainer c $ do
     res <- create "download" Nothing Nothing [] (words trassConfigDownload)
@@ -70,8 +84,13 @@ prepareContainer name TrassConfig{..} = do
       else do
         start False []
         wait ContainerRunning (-1)
+
+        copyToContainer hostPath containerPath
+
+        -- prepare container
         mapM_ (attach' . ("export " ++)) trassConfigEnv
-        mapM_ attach' trassConfigPrepareContainer
+        attachMany trassConfigPrepareContainer
+
         stop
         wait ContainerStopped (-1)
         return (Just c)
