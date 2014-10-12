@@ -20,6 +20,11 @@ library
   exposed-modules:
     Trass
   build-depends:      base          >=4.7   &&  <4.8
+                    , containers
+                    , transformers  >=0.2
+                    , yaml          >=0.8   &&  <0.9
+                    , unix          >=2.0
+                    , Unixutils
                     , lxc           >=0.3   &&  <0.4
 
 source-repository head
