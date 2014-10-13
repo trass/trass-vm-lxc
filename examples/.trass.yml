@@ -1,0 +1,40 @@
+global:
+  env:
+    - TRASS=1
+options:
+  system:
+    ubuntu:
+      global:
+        dist:     ubuntu
+        release:  trusty
+        arch:     amd64
+
+        env:
+          - DEBIAN_FRONTEND=noninteractive
+
+        prepare_container:
+          - echo 'APT::Get::Assume-Yes "true";' >  /etc/apt/apt.conf.d/90forceyes
+          - echo 'APT::Get::force-yes "true";'  >> /etc/apt/apt.conf.d/90forceyes
+          - apt-get update
+          - apt-get install wget tar
+
+      options:
+        language:
+          haskell:
+            default:
+              ghc: "7.8"
+            options:
+              ghc:
+                7.8:
+                  global:
+                    prepare_container:
+                      - wget https://www.haskell.org/platform/download/2014.2.0.0/haskell-platform-2014.2.0.0-unknown-linux-x86_64.tar.gz -O haskell-platform.tar.gz
+                      - cd /
+                      - tar xvf ~/haskell-platform.tar.gz
+                      - /usr/local/haskell/ghc-7.8.3-x86-64/bin/activate-hs
+                7.6:
+                  global:
+                    prepare_container:
+                      - apt-get update
+                      - apt-get install haskell-platform=2013.2.0.0.debian3
+

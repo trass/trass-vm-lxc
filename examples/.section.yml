@@ -1,0 +1,4 @@
+system: ubuntu
+# release: precise
+language: haskell
+ghc: "7.6"
