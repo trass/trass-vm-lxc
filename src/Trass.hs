@@ -1,5 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Trass where
 
 import Data.List
@@ -8,6 +9,7 @@ import qualified Data.Map as Map
 import Data.Monoid
 import Data.Function
 import Data.Yaml
+import Data.Text (Text)
 
 import Control.Applicative
 import Control.Monad
@@ -22,6 +24,47 @@ import System.Posix.Files
 import System.Posix.IO (handleToFd)
 
 type Command = String
+type Options m = Map Text (Map Text (Configuration m))
+
+data Configuration m = Configuration
+  { configurationOptions :: Options m
+  , configurationGlobal  :: m
+  }
+  deriving (Show)
+
+instance Monoid m => Monoid (Configuration m) where
+  mempty = Configuration Map.empty mempty
+  mappend t t' = Configuration
+    (mergeOptions (configurationOptions t) (configurationOptions t'))
+    (configurationGlobal t <> configurationGlobal t')
+
+instance (FromJSON m, Monoid m) => FromJSON (Configuration m) where
+  parseJSON (Object v) = Configuration
+                     <$> v .:? "options"  .!= Map.empty
+                     <*> v .:? "global"   .!= mempty
+  parseJSON _ = empty
+
+instance ToJSON m => ToJSON (Configuration m) where
+  toJSON Configuration{..} = object
+    [ "options" .= configurationOptions
+    , "global"  .= configurationGlobal
+    ]
+
+mergeOptions :: Monoid m => Options m -> Options m -> Options m
+mergeOptions = Map.unionWith (Map.unionWith (<>))
+
+applyConfiguration :: Monoid m => Configuration m -> Map Text Text -> m -> Either String m
+applyConfiguration cfg opts m
+  | Map.null opts = Right $ configurationGlobal cfg <> m
+  | null cfgs     = Left $ "unknown options: " <> show (Map.keys opts)
+  | otherwise     = applyConfiguration cfg'' opts' m
+  where
+    opts'   = Map.difference opts cfgOpts
+    cfgOpts = configurationOptions cfg
+    cfgs    = Map.elems $ Map.intersectionWith (Map.!) cfgOpts opts
+    cfg'    = mconcat cfgs
+    cfg''   = cfg' { configurationGlobal = configurationGlobal cfg <> configurationGlobal cfg' }
+
 
 data TrassVariant = TrassVariant
   { trassVariantDist              :: Maybe String

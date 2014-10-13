@@ -22,6 +22,7 @@ library
   build-depends:      base          >=4.7   &&  <4.8
                     , containers
                     , transformers  >=0.2
+                    , text
                     , yaml          >=0.8   &&  <0.9
                     , process       >=1.2
                     , unix          >=2.0
