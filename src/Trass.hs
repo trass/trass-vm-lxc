@@ -1,6 +1,8 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
 module Trass where
 
 import Data.List
@@ -8,6 +10,7 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Monoid
 import Data.Function
+import Data.Aeson.Types (Pair)
 import Data.Yaml
 import Data.Text (Text)
 
@@ -23,7 +26,8 @@ import System.Unix.Directory (withTemporaryDirectory)
 import System.Posix.Files
 import System.Posix.IO (handleToFd)
 
-type Command = String
+-- General configuration with options
+
 type Options m = Map Text (Map Text (Configuration m))
 
 data Configuration m = Configuration
@@ -39,9 +43,15 @@ instance Monoid m => Monoid (Configuration m) where
     (configurationGlobal t <> configurationGlobal t')
 
 instance (FromJSON m, Monoid m) => FromJSON (Configuration m) where
-  parseJSON (Object v) = Configuration
-                     <$> v .:? "options"  .!= Map.empty
-                     <*> v .:? "global"   .!= mempty
+  parseJSON o@(Object v) = Configuration
+                       <$> v .:  "options"
+                       <*> v .:? "global"   .!= mempty
+
+                       <|> Configuration Map.empty
+                       <$> v .: "global"
+
+                       <|> Configuration Map.empty
+                       <$> parseJSON o
   parseJSON _ = empty
 
 instance ToJSON m => ToJSON (Configuration m) where
@@ -65,80 +75,155 @@ applyConfiguration cfg opts m
     cfg'    = mconcat cfgs
     cfg''   = cfg' { configurationGlobal = configurationGlobal cfg <> configurationGlobal cfg' }
 
+-- TRASS configurations
 
-data TrassVariant = TrassVariant
-  { trassVariantDist              :: Maybe String
-  , trassVariantRelease           :: Maybe String
-  , trassVariantArch              :: Maybe String
-  , trassVariantEnvironment       :: [String]
-  , trassVariantPrepareContainer  :: [Command]
-  , trassVariantPrepareSubmit     :: [Command]
-  , trassVariantValidate          :: [Command]
-  , trassVariantInstall           :: [Command]
-  , trassVariantScript            :: [Command]
+newtype Commands = Commands
+  { getCommands :: [Text]
+  } deriving (Show, Read, Monoid, ToJSON)
+
+type EnvVars = Commands
+
+instance FromJSON Commands where
+  parseJSON (String cmd) = pure $ Commands [cmd]
+  parseJSON v = Commands <$> parseJSON v
+
+data TrassConfig = TrassConfig
+  { trassConfigDist               :: Maybe Text
+  , trassConfigRelease            :: Maybe Text
+  , trassConfigArch               :: Maybe Text
+  , trassConfigEnvironment        :: EnvVars
+  , trassConfigContainer          :: TrassContainerConfig
+  , trassConfigSubmission         :: TrassSubmissionConfig
   }
   deriving (Show)
 
-emptyTrassVariant :: TrassVariant
-emptyTrassVariant = TrassVariant Nothing Nothing Nothing [] [] [] [] [] []
+data TrassContainerConfig = TrassContainerConfig
+  { trassContainerConfigUser      :: TrassUserConfig
+  , trassContainerConfigPrepare   :: Commands
+  }
+  deriving (Show)
 
-instance Monoid TrassVariant where
-  mempty = emptyTrassVariant
-  mappend t t' = TrassVariant
-    (lastOf trassVariantDist)
-    (lastOf trassVariantRelease)
-    (lastOf trassVariantArch)
-    (mappendOf trassVariantEnvironment)
-    (mappendOf trassVariantPrepareContainer)
-    (mappendOf trassVariantPrepareSubmit)
-    (mappendOf trassVariantValidate)
-    (mappendOf trassVariantInstall)
-    (mappendOf trassVariantScript)
+data TrassSubmissionConfig = TrassSubmissionConfig
+  { trassSubmissionConfigPrepare  :: Commands
+  , trassSubmissionConfigValidate :: Commands
+  , trassSubmissionConfigInstall  :: Commands
+  , trassSubmissionConfigScript   :: Commands
+  }
+  deriving (Show)
+
+data TrassUserConfig = TrassUserConfig
+  { trassUserConfigUsername       :: Maybe Text
+  , trassUserConfigHome           :: Maybe FilePath
+  , trassUserConfigPrepare        :: Commands
+  }
+  deriving (Show)
+
+lastOf :: a -> a -> (a -> Maybe b) -> Maybe b
+lastOf x y f = maybe (f x) Just (f y)
+
+mappendOf :: Monoid m => a -> a -> (a -> m) -> m
+mappendOf x y f = f x <> f y
+
+instance Monoid TrassConfig where
+  mempty = TrassConfig Nothing Nothing Nothing mempty mempty mempty
+  mappend c c' = TrassConfig
+    (lastOf'    trassConfigDist)
+    (lastOf'    trassConfigRelease)
+    (lastOf'    trassConfigArch)
+    (mappendOf' trassConfigEnvironment)
+    (mappendOf' trassConfigContainer)
+    (mappendOf' trassConfigSubmission)
     where
-      lastOf f = getLast (Last (f t) <> Last (f t'))
-      mappendOf f = f t <> f t'
+      lastOf'    = lastOf c c'
+      mappendOf' = mappendOf c c'
 
-instance FromJSON TrassVariant where
-  parseJSON (Object v) = TrassVariant
+instance Monoid TrassContainerConfig where
+  mempty = TrassContainerConfig mempty mempty
+  mappend c c' = TrassContainerConfig
+    (mappendOf' trassContainerConfigUser)
+    (mappendOf' trassContainerConfigPrepare)
+    where
+      mappendOf' = mappendOf c c'
+
+instance Monoid TrassSubmissionConfig where
+  mempty = TrassSubmissionConfig mempty mempty mempty mempty
+  mappend c c' = TrassSubmissionConfig
+    (mappendOf' trassSubmissionConfigPrepare)
+    (mappendOf' trassSubmissionConfigValidate)
+    (mappendOf' trassSubmissionConfigInstall)
+    (mappendOf' trassSubmissionConfigScript)
+    where
+      mappendOf' = mappendOf c c'
+
+instance Monoid TrassUserConfig where
+  mempty = TrassUserConfig Nothing Nothing mempty
+  mappend c c' = TrassUserConfig
+    (lastOf'    trassUserConfigUsername)
+    (lastOf'    trassUserConfigHome)
+    (mappendOf' trassUserConfigPrepare)
+    where
+      lastOf'    = lastOf c c'
+      mappendOf' = mappendOf c c'
+
+instance FromJSON TrassConfig where
+  parseJSON (Object v) = TrassConfig
                      <$> v .:? "dist"
                      <*> v .:? "release"
                      <*> v .:? "arch"
-                     <*> v .:? "env"                .!= []
-                     <*> v .:? "prepare_container"  .!= []
-                     <*> v .:? "prepare_submit"     .!= []
-                     <*> v .:? "validate"           .!= []
-                     <*> v .:? "install"            .!= []
-                     <*> v .:? "script"             .!= []
+                     <*> v .:? "env" .!= mempty
+                     <*> v .:? "container"  .!= mempty
+                     <*> v .:? "submission" .!= mempty
+
+instance FromJSON TrassContainerConfig where
+  parseJSON (Object v) = TrassContainerConfig
+                     <$> v .:? "user"    .!= mempty
+                     <*> v .:? "prepare" .!= mempty
+  parseJSON v@(Array _) = TrassContainerConfig mempty <$> parseJSON v
   parseJSON _ = empty
 
-instance ToJSON TrassVariant where
-  toJSON TrassVariant{..} = object
-    [ "dist"              .= trassVariantDist
-    , "release"           .= trassVariantRelease
-    , "arch"              .= trassVariantArch
-    , "env"               .= trassVariantEnvironment
-    , "prepare_container" .= trassVariantPrepareContainer
-    , "prepare_submit"    .= trassVariantPrepareSubmit
-    , "validate"          .= trassVariantValidate
-    , "install"           .= trassVariantInstall
-    , "script"            .= trassVariantScript ]
+instance FromJSON TrassSubmissionConfig where
+  parseJSON (Object v) = TrassSubmissionConfig
+                     <$> v .:? "prepare"  .!= mempty
+                     <*> v .:? "validate" .!= mempty
+                     <*> v .:? "install"  .!= mempty
+                     <*> v .:? "script"   .!= mempty
 
-data TrassConfig = TrassConfig
-  { trassConfigGlobal   :: TrassVariant
-  , trassConfigVariants :: Map String TrassVariant
-  }
-  deriving (Show)
+instance FromJSON TrassUserConfig where
+  parseJSON (Object v) = TrassUserConfig
+                     <$> v .:? "username"
+                     <*> v .:? "home"
+                     <*> v .:? "prepare" .!= mempty
+  parseJSON _ = empty
 
-instance FromJSON TrassConfig where
-   parseJSON (Object v) = TrassConfig
-                      <$> v .: "global"
-                      <*> v .:? "variants" .!= Map.empty
-   parseJSON _          = empty
+(.=?) :: ToJSON a => Text -> Maybe a -> [Pair]
+k .=? v = maybe [] (\v' -> [k .= v']) v
 
 instance ToJSON TrassConfig where
-  toJSON TrassConfig{..} = object
-    [ "global"    .= trassConfigGlobal
-    , "variants"  .= trassConfigVariants ]
+  toJSON TrassConfig{..} = object $ concat
+    [ "dist"          .=? trassConfigDist
+    , "release"       .=? trassConfigRelease
+    , "arch"          .=? trassConfigArch
+    , [ "env"         .=  trassConfigEnvironment
+      , "container"   .=  trassConfigContainer
+      , "submission"  .=  trassConfigSubmission ] ]
+
+instance ToJSON TrassContainerConfig where
+  toJSON TrassContainerConfig{..} = object
+    [ "user"    .= trassContainerConfigUser
+    , "prepare" .= trassContainerConfigPrepare ]
+
+instance ToJSON TrassSubmissionConfig where
+  toJSON TrassSubmissionConfig{..} = object
+    [ "prepare"   .= trassSubmissionConfigPrepare
+    , "validate"  .= trassSubmissionConfigValidate
+    , "install"   .= trassSubmissionConfigInstall
+    , "script"    .= trassSubmissionConfigScript ]
+
+instance ToJSON TrassUserConfig where
+  toJSON TrassUserConfig{..} = object $ concat
+    [ "username"  .=? trassUserConfigUsername
+    , "home"      .=? trassUserConfigHome
+    , [ "prepare" .=  trassUserConfigPrepare ] ]
 
 attach' :: String -> LXC (Maybe ExitCode)
 attach' cmd = do
@@ -162,51 +247,4 @@ copyToContainer hostPath containerPath = do
     defaultAttachOptions { attachStdinFD = outFd }
     "sh" ["sh", "-c", "tar zxf - -O >" ++ containerPath]
   return ()
-
-prepareContainers :: String -> TrassConfig -> LXC () -> IO ()
-prepareContainers prefix TrassConfig{..} prepare = do
-  let variants = if Map.null trassConfigVariants
-                   then Map.fromList [("", mempty)]
-                   else trassConfigVariants
-  forM_ (Map.toList variants) $ \(name, variant) -> do
-    withContainer (Container (prefix ++ name) Nothing) $ do
-      prepareContainer (trassConfigGlobal <> variant) prepare
-  return ()
-
-prepareContainer :: TrassVariant -> LXC () -> LXC (Maybe ExitCode)
-prepareContainer TrassVariant{..} prepare = do
-  case (,,) <$> trassVariantDist <*> trassVariantRelease <*> trassVariantArch of
-    Nothing -> return Nothing
-    Just (d, r, a) -> do
-      create "download" Nothing Nothing [] ["-d", d, "-r", r, "-a", a]
-      start False []
-      wait ContainerRunning (-1)
-      prepare
-      code <- attachMany $ concat
-                [ map (\var -> "echo 'export " ++ var ++ "' >> /etc/profile") trassVariantEnvironment
-                , trassVariantPrepareContainer ]
-      stop
-      wait ContainerStopped (-1)
-      return code
-
-runSubmission :: Container -> TrassVariant -> LXC () -> IO (Maybe ExitCode)
-runSubmission c TrassVariant{..} prepare = liftIO $ do
-  withTemporaryDirectory "submission." $ \tempdir -> do
-    setFileMode tempdir accessModes
-    msc <- withContainer c $ clone Nothing (Just tempdir) [CloneSnapshot] Nothing Nothing Nothing []
-    case msc of
-      Nothing -> return Nothing
-      Just sc -> withContainer sc $ do
-        start False []
-        wait ContainerRunning (-1)
-        code <- attachMany $ concat
-          [ trassVariantPrepareSubmit
-          , trassVariantValidate
-          , trassVariantInstall
-          , trassVariantScript
-          ]
-        stop
-        wait ContainerStopped (-1)
-        destroy
-        return code
 

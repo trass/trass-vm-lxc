@@ -23,6 +23,7 @@ library
                     , containers
                     , transformers  >=0.2
                     , text
+                    , aeson         >=0.2
                     , yaml          >=0.8   &&  <0.9
                     , process       >=1.2
                     , unix          >=2.0
