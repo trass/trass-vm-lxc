@@ -21,6 +21,7 @@ library
     Trass
   build-depends:      base          >=4.7   &&  <4.8
                     , containers
+                    , unordered-containers
                     , transformers  >=0.2
                     , text
                     , aeson         >=0.2

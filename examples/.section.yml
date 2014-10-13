@@ -1,4 +1,4 @@
 system: ubuntu
-# release: precise
+release: precise
 language: haskell
 ghc: "7.6"

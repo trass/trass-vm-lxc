@@ -8,11 +8,13 @@ module Trass where
 import Data.List
 import Data.Map (Map)
 import qualified Data.Map as Map
+import qualified Data.HashMap.Strict as HashMap
 import Data.Monoid
 import Data.Function
 import Data.Aeson.Types (Pair)
 import Data.Yaml
 import Data.Text (Text)
+import qualified Data.Text as Text
 
 import Control.Applicative
 import Control.Monad
@@ -36,11 +38,23 @@ data Configuration m = Configuration
   }
   deriving (Show)
 
+data ConfigWithOptions m = ConfigWithOptions
+  { configWithOptionsOptions  :: Map Text Text
+  , configWithOptionsConfig   :: m
+  }
+  deriving (Show)
+
 instance Monoid m => Monoid (Configuration m) where
   mempty = Configuration Map.empty mempty
   mappend t t' = Configuration
     (mergeOptions (configurationOptions t) (configurationOptions t'))
     (configurationGlobal t <> configurationGlobal t')
+
+instance Monoid m => Monoid (ConfigWithOptions m) where
+  mempty = ConfigWithOptions Map.empty mempty
+  mappend c c' = ConfigWithOptions
+    (configWithOptionsOptions c <> configWithOptionsOptions c')
+    (configWithOptionsConfig  c <> configWithOptionsConfig  c')
 
 instance (FromJSON m, Monoid m) => FromJSON (Configuration m) where
   parseJSON o@(Object v) = Configuration
@@ -54,6 +68,16 @@ instance (FromJSON m, Monoid m) => FromJSON (Configuration m) where
                        <$> parseJSON o
   parseJSON _ = empty
 
+instance (FromJSON m, ToJSON m, Monoid m) => FromJSON (ConfigWithOptions m) where
+  parseJSON v = do
+    cfg  <- parseJSON v
+    opts <- parseJSON v
+    let keys = case toJSON cfg of
+                 Object v' -> HashMap.keys v'
+                 _         -> []
+        opts' = foldr Map.delete opts keys
+    return $ ConfigWithOptions opts' cfg
+
 instance ToJSON m => ToJSON (Configuration m) where
   toJSON Configuration{..} = object
     [ "options" .= configurationOptions
@@ -63,11 +87,11 @@ instance ToJSON m => ToJSON (Configuration m) where
 mergeOptions :: Monoid m => Options m -> Options m -> Options m
 mergeOptions = Map.unionWith (Map.unionWith (<>))
 
-applyConfiguration :: Monoid m => Configuration m -> Map Text Text -> m -> Either String m
-applyConfiguration cfg opts m
+applyConfiguration :: Monoid m => Configuration m -> ConfigWithOptions m -> Either String m
+applyConfiguration cfg (ConfigWithOptions opts m)
   | Map.null opts = Right $ configurationGlobal cfg <> m
   | null cfgs     = Left $ "unknown options: " <> show (Map.keys opts)
-  | otherwise     = applyConfiguration cfg'' opts' m
+  | otherwise     = applyConfiguration cfg'' (ConfigWithOptions opts' m)
   where
     opts'   = Map.difference opts cfgOpts
     cfgOpts = configurationOptions cfg
@@ -225,17 +249,18 @@ instance ToJSON TrassUserConfig where
     , "home"      .=? trassUserConfigHome
     , [ "prepare" .=  trassUserConfigPrepare ] ]
 
-attach' :: String -> LXC (Maybe ExitCode)
+attach' :: Text -> LXC (Maybe ExitCode)
 attach' cmd = do
-  liftIO $ putStrLn ("$ " ++ cmd)
-  attachRunWait defaultAttachOptions "sh" ["sh", "-c", cmd]
+  let cmd' = Text.unpack cmd
+  liftIO $ putStrLn ("$ " ++ cmd')
+  attachRunWait defaultAttachOptions "sh" ["sh", "-c", cmd']
 
-attachMany :: [String] -> LXC (Maybe ExitCode)
-attachMany [] = return (Just ExitSuccess)
-attachMany (cmd:cmds) = do
+attachMany :: Commands -> LXC (Maybe ExitCode)
+attachMany (Commands []) = return (Just ExitSuccess)
+attachMany (Commands (cmd:cmds)) = do
   mc <- attach' cmd
   case mc of
-    Just ExitSuccess -> attachMany cmds
+    Just ExitSuccess -> attachMany (Commands cmds)
     _ -> return mc
 
 copyToContainer :: FilePath -> FilePath -> LXC ()
