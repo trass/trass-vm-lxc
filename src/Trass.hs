@@ -2,6 +2,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 module Trass where
 
@@ -31,7 +32,26 @@ import System.Posix.IO (handleToFd)
 
 -- General configuration with options
 
-type Options m = Map Text (Map Text (Configuration m))
+newtype TextValue = TextValue
+  { getTextValue :: Text
+  } deriving (Eq, Ord, Show, Read, Monoid, ToJSON)
+
+instance FromJSON TextValue where
+  parseJSON (String s) = pure $ TextValue s
+  parseJSON (Number n) = pure $ TextValue (Text.pack $ show n)
+  parseJSON (Bool b)   = pure $ TextValue (if b then "true" else "false")
+  parseJSON Null       = pure $ TextValue "null"
+  parseJSON v          = pure $ TextValue (read . show $ encode v)
+
+type OptionKey   = Text
+type OptionValue = TextValue
+type Options m   = Map OptionKey (Map OptionValue (Configuration m))
+
+instance FromJSON v => FromJSON (Map TextValue v) where
+  parseJSON v = Map.mapKeys TextValue <$> parseJSON v
+
+instance ToJSON v => ToJSON (Map TextValue v) where
+  toJSON = toJSON . Map.mapKeys getTextValue
 
 data Configuration m = Configuration
   { configurationOptions :: Options m
@@ -40,7 +60,7 @@ data Configuration m = Configuration
   deriving (Show)
 
 data ConfigWithOptions m = ConfigWithOptions
-  { configWithOptionsOptions  :: Map Text Text
+  { configWithOptionsOptions  :: Map OptionKey OptionValue
   , configWithOptionsConfig   :: m
   }
   deriving (Show)
@@ -102,22 +122,13 @@ applyConfiguration cfg (ConfigWithOptions opts m)
 
 -- TRASS configurations
 
-newtype Command = Command
-  { getCommand :: Text
-  } deriving (Show, Read, Monoid, ToJSON)
+type Command = TextValue
 
 newtype Commands = Commands
   { getCommands :: [Command]
   } deriving (Show, Read, Monoid, ToJSON)
 
 type EnvVars = Commands
-
-instance FromJSON Command where
-  parseJSON (String s) = pure $ Command s
-  parseJSON (Number n) = pure $ Command (Text.pack $ show n)
-  parseJSON (Bool b)   = pure $ Command (if b then "true" else "false")
-  parseJSON Null       = pure $ Command "null"
-  parseJSON v          = pure $ Command (read . show $ encode v)
 
 instance FromJSON Commands where
   parseJSON v = Commands <$> (parseJSON v <|> (\c -> [c]) <$> parseJSON v)
@@ -243,7 +254,7 @@ instance ToJSON TrassUserConfig where
 attach' :: [String] -> TrassUserConfig -> Command -> LXC (Maybe ExitCode)
 attach' env TrassUserConfig{..} cmd = do
   let run   = attachRunWait defaultAttachOptions { attachExtraEnvVars = env }
-      cmd'  = Text.unpack (getCommand cmd)
+      cmd'  = Text.unpack (getTextValue cmd)
       cmd'' = case trassUserConfigHome of
                 Nothing   -> cmd'
                 Just path -> "cd " <> path <> ";" <> cmd'
@@ -280,8 +291,8 @@ prepareContainer TrassConfig{..} = do
       wait ContainerRunning (-1)
 
       -- get env
-      let env  = getCommands trassConfigEnvironment <> [Command $ "USER=" <> fromMaybe "root" (trassUserConfigUsername trassConfigUser)]
-          env' = map (Text.unpack . getCommand) env
+      let env  = getCommands trassConfigEnvironment <> [TextValue $ "USER=" <> fromMaybe "root" (trassUserConfigUsername trassConfigUser)]
+          env' = map (Text.unpack . getTextValue) env
       -- prepare user
       attachMany env' mempty (trassUserConfigPrepare trassConfigUser)
       -- prepare container
