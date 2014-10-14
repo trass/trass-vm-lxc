@@ -43,19 +43,15 @@ options:
       options:
         language:
           c: {}
-          c++:
-            prepare:
-              - sudo apt-get install g++
+          c++: sudo apt-get install g++
           haskell:
             options:
               ghc:
                 7.8:
-                  prepare:
-                    - wget https://www.haskell.org/platform/download/2014.2.0.0/haskell-platform-2014.2.0.0-unknown-linux-x86_64.tar.gz -O haskell-platform.tar.gz
-                    - cd /
-                    - sudo tar xvf ~/haskell-platform.tar.gz
-                    - sudo /usr/local/haskell/ghc-7.8.3-x86-64/bin/activate-hs
+                  - wget https://www.haskell.org/platform/download/2014.2.0.0/haskell-platform-2014.2.0.0-unknown-linux-x86_64.tar.gz -O haskell-platform.tar.gz
+                  - cd /
+                  - sudo tar xvf ~/haskell-platform.tar.gz
+                  - sudo /usr/local/haskell/ghc-7.8.3-x86-64/bin/activate-hs
                 7.6:
-                  prepare:
-                    - sudo apt-get install haskell-platform=2013.2.0.0.debian3
+                  - sudo apt-get install haskell-platform=2013.2.0.0.debian3
 

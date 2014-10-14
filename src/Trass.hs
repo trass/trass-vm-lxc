@@ -67,7 +67,7 @@ instance (FromJSON m, Monoid m) => FromJSON (Configuration m) where
 
                        <|> Configuration Map.empty
                        <$> parseJSON o
-  parseJSON _ = empty
+  parseJSON v = Configuration Map.empty <$> parseJSON v
 
 instance (FromJSON m, ToJSON m, Monoid m) => FromJSON (ConfigWithOptions m) where
   parseJSON v = do
@@ -197,6 +197,7 @@ instance FromJSON TrassConfig where
                      <*> v .:? "prepare"    .!= mempty
                      <*> v .:? "user"       .!= mempty
                      <*> v .:? "submission" .!= mempty
+  parseJSON v = (\cmds -> mempty {trassConfigPrepare = cmds}) <$> parseJSON v
 
 instance FromJSON TrassSubmissionConfig where
   parseJSON (Object v) = TrassSubmissionConfig
@@ -204,6 +205,7 @@ instance FromJSON TrassSubmissionConfig where
                      <*> v .:? "validate" .!= mempty
                      <*> v .:? "install"  .!= mempty
                      <*> v .:? "script"   .!= mempty
+  parseJSON _ = empty
 
 instance FromJSON TrassUserConfig where
   parseJSON (Object v) = TrassUserConfig
