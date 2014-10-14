@@ -102,15 +102,25 @@ applyConfiguration cfg (ConfigWithOptions opts m)
 
 -- TRASS configurations
 
+newtype Command = Command
+  { getCommand :: Text
+  } deriving (Show, Read, Monoid, ToJSON)
+
 newtype Commands = Commands
-  { getCommands :: [Text]
+  { getCommands :: [Command]
   } deriving (Show, Read, Monoid, ToJSON)
 
 type EnvVars = Commands
 
+instance FromJSON Command where
+  parseJSON (String s) = pure $ Command s
+  parseJSON (Number n) = pure $ Command (Text.pack $ show n)
+  parseJSON (Bool b)   = pure $ Command (if b then "true" else "false")
+  parseJSON Null       = pure $ Command "null"
+  parseJSON v          = pure $ Command (read . show $ encode v)
+
 instance FromJSON Commands where
-  parseJSON (String cmd) = pure $ Commands [cmd]
-  parseJSON v = Commands <$> parseJSON v
+  parseJSON v = Commands <$> (parseJSON v <|> (\c -> [c]) <$> parseJSON v)
 
 data TrassConfig = TrassConfig
   { trassConfigDist               :: Maybe Text
@@ -228,17 +238,17 @@ instance ToJSON TrassUserConfig where
     , "home"      .=? trassUserConfigHome
     , [ "prepare" .=  trassUserConfigPrepare ] ]
 
-attach' :: [String] -> TrassUserConfig -> Text -> LXC (Maybe ExitCode)
+attach' :: [String] -> TrassUserConfig -> Command -> LXC (Maybe ExitCode)
 attach' env TrassUserConfig{..} cmd = do
   let run   = attachRunWait defaultAttachOptions { attachExtraEnvVars = env }
-      cmd'  = Text.unpack cmd
+      cmd'  = Text.unpack (getCommand cmd)
       cmd'' = case trassUserConfigHome of
                 Nothing   -> cmd'
                 Just path -> "cd " <> path <> ";" <> cmd'
   liftIO $ putStrLn ("$ " ++ cmd')
   case trassUserConfigUsername of
     Nothing -> run "sh" [ "sh", "-c", cmd'' ]
-    Just u  -> run "su" [ "su", Text.unpack u, "-c", intercalate " " env <> " " <> cmd'' ]
+    Just u  -> run "su" [ "su", Text.unpack u, "-c", cmd'' ]
 
 attachMany :: [String] -> TrassUserConfig -> Commands -> LXC (Maybe ExitCode)
 attachMany _ _ (Commands []) = return (Just ExitSuccess)
@@ -268,11 +278,12 @@ prepareContainer TrassConfig{..} = do
       wait ContainerRunning (-1)
 
       -- get env
-      let env = map Text.unpack $ getCommands trassConfigEnvironment
+      let env  = getCommands trassConfigEnvironment <> [Command $ "USER=" <> fromMaybe "root" (trassUserConfigUsername trassConfigUser)]
+          env' = map (Text.unpack . getCommand) env
       -- prepare user
-      attachMany env mempty (trassUserConfigPrepare trassConfigUser)
+      attachMany env' mempty (trassUserConfigPrepare trassConfigUser)
       -- prepare container
-      attachMany env trassConfigUser trassConfigPrepare
+      attachMany env' trassConfigUser trassConfigPrepare
 
       stop
       wait ContainerStopped (-1)

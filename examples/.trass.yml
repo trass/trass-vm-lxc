@@ -1,6 +1,6 @@
 global:
   env:
-    - TRASS=1
+    - TRASS=true
 options:
   system:
     ubuntu:
@@ -16,13 +16,15 @@ options:
           username: ubuntu
           home: /home/ubuntu
           prepare:
-            - "echo 'ubuntu ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers"
+            - echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
         prepare:
+          # force yes for apt-get (needed for non-interactivity)
           - sudo sh -c "echo 'APT::Get::Assume-Yes "true";' >  /etc/apt/apt.conf.d/forceyes"
           - sudo sh -c "echo 'APT::Get::force-yes "true";'  >> /etc/apt/apt.conf.d/forceyes"
           # wait for internet connection
-          - "while ! ping -c1 www.google.com &>/dev/null; do :; done"
+          - while ! ping -c1 www.google.com &>/dev/null; do :; done
+          # install packages
           - sudo apt-get update
           # preseed postfix package
           - sudo debconf-set-selections <<< "postfix postfix/mailname string 'lxc-container.com'"
