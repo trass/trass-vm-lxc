@@ -54,8 +54,9 @@ instance ToJSON v => ToJSON (Map TextValue v) where
   toJSON = toJSON . Map.mapKeys getTextValue
 
 data Configuration m = Configuration
-  { configurationOptions :: Options m
-  , configurationGlobal  :: m
+  { configurationOptions  :: Options m
+  , configurationDefault  :: Map OptionKey OptionValue
+  , configurationGlobal   :: m
   }
   deriving (Show)
 
@@ -66,9 +67,10 @@ data ConfigWithOptions m = ConfigWithOptions
   deriving (Show)
 
 instance Monoid m => Monoid (Configuration m) where
-  mempty = Configuration Map.empty mempty
+  mempty = Configuration Map.empty Map.empty mempty
   mappend t t' = Configuration
     (mergeOptions (configurationOptions t) (configurationOptions t'))
+    (configurationDefault t <> configurationDefault t')
     (configurationGlobal t <> configurationGlobal t')
 
 instance Monoid m => Monoid (ConfigWithOptions m) where
@@ -80,14 +82,15 @@ instance Monoid m => Monoid (ConfigWithOptions m) where
 instance (FromJSON m, Monoid m) => FromJSON (Configuration m) where
   parseJSON o@(Object v) = Configuration
                        <$> v .:  "options"
+                       <*> v .:? "default"  .!= Map.empty
                        <*> v .:? "global"   .!= mempty
 
-                       <|> Configuration Map.empty
+                       <|> Configuration Map.empty Map.empty
                        <$> v .: "global"
 
-                       <|> Configuration Map.empty
+                       <|> Configuration Map.empty Map.empty
                        <$> parseJSON o
-  parseJSON v = Configuration Map.empty <$> parseJSON v
+  parseJSON v = Configuration Map.empty Map.empty <$> parseJSON v
 
 instance (FromJSON m, ToJSON m, Monoid m) => FromJSON (ConfigWithOptions m) where
   parseJSON v = do
@@ -102,6 +105,7 @@ instance (FromJSON m, ToJSON m, Monoid m) => FromJSON (ConfigWithOptions m) wher
 instance ToJSON m => ToJSON (Configuration m) where
   toJSON Configuration{..} = object
     [ "options" .= configurationOptions
+    , "default" .= configurationDefault
     , "global"  .= configurationGlobal
     ]
 
@@ -110,13 +114,14 @@ mergeOptions = Map.unionWith (Map.unionWith (<>))
 
 applyConfiguration :: Monoid m => Configuration m -> ConfigWithOptions m -> Either String m
 applyConfiguration cfg (ConfigWithOptions opts m)
-  | Map.null opts = Right $ configurationGlobal cfg <> m
-  | null cfgs     = Left $ "unknown options: " <> show (Map.keys opts)
-  | otherwise     = applyConfiguration cfg'' (ConfigWithOptions opts' m)
+  | Map.null opts' = Right $ configurationGlobal cfg <> m
+  | null cfgs      = Left $ "unknown options: " <> show (Map.keys opts')
+  | otherwise      = applyConfiguration cfg'' (ConfigWithOptions opts'' m)
   where
-    opts'   = Map.difference opts cfgOpts
+    opts'   = configurationDefault cfg <> opts
+    opts''  = Map.difference opts' cfgOpts
     cfgOpts = configurationOptions cfg
-    cfgs    = Map.elems $ Map.intersectionWith (Map.!) cfgOpts opts
+    cfgs    = Map.elems $ Map.intersectionWith (Map.!) cfgOpts opts'
     cfg'    = mconcat cfgs
     cfg''   = cfg' { configurationGlobal = configurationGlobal cfg <> configurationGlobal cfg' }
 

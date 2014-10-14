@@ -1,6 +1,10 @@
+default:
+  system: ubuntu
+
 global:
   env:
     - TRASS=true
+
 options:
   system:
     ubuntu:
@@ -45,6 +49,8 @@ options:
           c: {}
           c++: sudo apt-get install g++
           haskell:
+            default:
+              ghc: 7.8
             options:
               ghc:
                 7.8:
