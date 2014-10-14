@@ -12,31 +12,48 @@ options:
         env:
           - DEBIAN_FRONTEND=noninteractive
 
-        container:
-          user:
-            username: ubuntu
-            home: /home/ubuntu
-            prepare:
-              - "echo 'ubuntu ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers"
+        user:
+          username: ubuntu
+          home: /home/ubuntu
           prepare:
-            - sudo echo 'APT::Get::Assume-Yes "true";'   >  /etc/apt/apt.conf.d/90forceyes
-            - sudo echo 'APT::Get::force-yes "true";'    >> /etc/apt/apt.conf.d/90forceyes
-            - sudo apt-get update
-            - sudo apt-get install wget tar
+            - "echo 'ubuntu ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers"
+
+        prepare:
+          - sudo sh -c "echo 'APT::Get::Assume-Yes "true";' >  /etc/apt/apt.conf.d/forceyes"
+          - sudo sh -c "echo 'APT::Get::force-yes "true";'  >> /etc/apt/apt.conf.d/forceyes"
+          # wait for internet connection
+          - "while ! ping -c1 www.google.com &>/dev/null; do :; done"
+          - sudo apt-get update
+          # preseed postfix package
+          - sudo debconf-set-selections <<< "postfix postfix/mailname string 'lxc-container.com'"
+          - sudo debconf-set-selections <<< "postfix postfix/main_mailer_type string 'No configuration'"
+          # Version control
+          - sudo apt-get install git mercurial darcs subversion
+          # Compilers & Build toolchain
+          - sudo apt-get install gcc clang make autotools-dev cmake scons
+          # Networking
+          - sudo apt-get install curl wget openssl rsync
+          # Runtimes
+          - sudo apt-get install python ruby
+          # Utilities
+          - sudo apt-get install tar
 
       options:
         language:
+          c: {}
+          c++:
+            prepare:
+              - sudo apt-get install g++
           haskell:
             options:
               ghc:
                 7.8:
-                  container:
+                  prepare:
                     - wget https://www.haskell.org/platform/download/2014.2.0.0/haskell-platform-2014.2.0.0-unknown-linux-x86_64.tar.gz -O haskell-platform.tar.gz
                     - cd /
                     - sudo tar xvf ~/haskell-platform.tar.gz
                     - sudo /usr/local/haskell/ghc-7.8.3-x86-64/bin/activate-hs
                 7.6:
-                  container:
-                    - sudo apt-get update
+                  prepare:
                     - sudo apt-get install haskell-platform=2013.2.0.0.debian3
 
