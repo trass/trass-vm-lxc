@@ -13,7 +13,7 @@ import qualified Data.HashMap.Strict as HashMap
 import Data.Monoid
 import Data.Maybe
 import Data.Function
-import Data.Aeson.Types (Pair)
+import Data.Aeson.Types (Pair, Value(..))
 import Data.Yaml
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -25,6 +25,7 @@ import Control.Concurrent
 
 import System.LXC
 import System.Exit
+import System.FilePath
 import System.Process
 import System.Unix.Directory (withTemporaryDirectory)
 import System.Posix.Files
@@ -145,15 +146,21 @@ data TrassConfig = TrassConfig
   , trassConfigEnvironment        :: EnvVars
   , trassConfigPrepare            :: Commands
   , trassConfigUser               :: TrassUserConfig
+  , trassConfigTaskDir            :: Maybe FilePath
   , trassConfigSubmission         :: TrassSubmissionConfig
   }
   deriving (Show)
 
 data TrassSubmissionConfig = TrassSubmissionConfig
-  { trassSubmissionConfigPrepare  :: Commands
-  , trassSubmissionConfigValidate :: Commands
-  , trassSubmissionConfigInstall  :: Commands
-  , trassSubmissionConfigScript   :: Commands
+  { trassSubmissionConfigFile           :: Maybe FilePath
+  , trassSubmissionConfigDir            :: Maybe FilePath
+  , trassSubmissionConfigBeforeInstall  :: Maybe Commands
+  , trassSubmissionConfigInstall        :: Maybe Commands
+  , trassSubmissionConfigBeforeScript   :: Maybe Commands
+  , trassSubmissionConfigScript         :: Maybe Commands
+  , trassSubmissionConfigAfterSuccess   :: Maybe Commands
+  , trassSubmissionConfigAfterFailure   :: Maybe Commands
+  , trassSubmissionConfigAfterScript    :: Maybe Commands
   }
   deriving (Show)
 
@@ -165,13 +172,13 @@ data TrassUserConfig = TrassUserConfig
   deriving (Show)
 
 lastOf :: a -> a -> (a -> Maybe b) -> Maybe b
-lastOf x y f = maybe (f x) Just (f y)
+lastOf x y f = f y <|> f x
 
 mappendOf :: Monoid m => a -> a -> (a -> m) -> m
 mappendOf x y f = f x <> f y
 
 instance Monoid TrassConfig where
-  mempty = TrassConfig Nothing Nothing Nothing mempty mempty mempty mempty
+  mempty = TrassConfig Nothing Nothing Nothing mempty mempty mempty Nothing mempty
   mappend c c' = TrassConfig
     (lastOf'    trassConfigDist)
     (lastOf'    trassConfigRelease)
@@ -179,20 +186,26 @@ instance Monoid TrassConfig where
     (mappendOf' trassConfigEnvironment)
     (mappendOf' trassConfigPrepare)
     (mappendOf' trassConfigUser)
+    (lastOf'    trassConfigTaskDir)
     (mappendOf' trassConfigSubmission)
     where
       lastOf'    = lastOf c c'
       mappendOf' = mappendOf c c'
 
 instance Monoid TrassSubmissionConfig where
-  mempty = TrassSubmissionConfig mempty mempty mempty mempty
+  mempty = TrassSubmissionConfig Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   mappend c c' = TrassSubmissionConfig
-    (mappendOf' trassSubmissionConfigPrepare)
-    (mappendOf' trassSubmissionConfigValidate)
-    (mappendOf' trassSubmissionConfigInstall)
-    (mappendOf' trassSubmissionConfigScript)
+    (lastOf' trassSubmissionConfigFile)
+    (lastOf' trassSubmissionConfigDir)
+    (lastOf' trassSubmissionConfigBeforeInstall)
+    (lastOf' trassSubmissionConfigInstall)
+    (lastOf' trassSubmissionConfigBeforeScript)
+    (lastOf' trassSubmissionConfigScript)
+    (lastOf' trassSubmissionConfigAfterSuccess)
+    (lastOf' trassSubmissionConfigAfterFailure)
+    (lastOf' trassSubmissionConfigAfterScript)
     where
-      mappendOf' = mappendOf c c'
+      lastOf'    = lastOf c c'
 
 instance Monoid TrassUserConfig where
   mempty = TrassUserConfig Nothing Nothing mempty
@@ -205,22 +218,28 @@ instance Monoid TrassUserConfig where
       mappendOf' = mappendOf c c'
 
 instance FromJSON TrassConfig where
-  parseJSON (Object v) = TrassConfig
-                     <$> v .:? "dist"
-                     <*> v .:? "release"
-                     <*> v .:? "arch"
-                     <*> v .:? "env"        .!= mempty
-                     <*> v .:? "prepare"    .!= mempty
-                     <*> v .:? "user"       .!= mempty
-                     <*> v .:? "submission" .!= mempty
+  parseJSON o@(Object v) = TrassConfig
+                       <$> v .:? "dist"
+                       <*> v .:? "release"
+                       <*> v .:? "arch"
+                       <*> v .:? "env"        .!= mempty
+                       <*> v .:? "prepare"    .!= mempty
+                       <*> v .:? "user"       .!= mempty
+                       <*> v .:? "task_dir"
+                       <*> (parseJSON o <|> pure mempty)
   parseJSON v = (\cmds -> mempty {trassConfigPrepare = cmds}) <$> parseJSON v
 
 instance FromJSON TrassSubmissionConfig where
   parseJSON (Object v) = TrassSubmissionConfig
-                     <$> v .:? "prepare"  .!= mempty
-                     <*> v .:? "validate" .!= mempty
-                     <*> v .:? "install"  .!= mempty
-                     <*> v .:? "script"   .!= mempty
+                     <$> v .:? "submit_file"
+                     <*> v .:? "submit_dir"
+                     <*> v .:? "before_install"
+                     <*> v .:? "install"
+                     <*> v .:? "before_script"
+                     <*> v .:? "script"
+                     <*> v .:? "after_success"
+                     <*> v .:? "after_failure"
+                     <*> v .:? "after_script"
   parseJSON _ = empty
 
 instance FromJSON TrassUserConfig where
@@ -233,22 +252,33 @@ instance FromJSON TrassUserConfig where
 (.=?) :: ToJSON a => Text -> Maybe a -> [Pair]
 k .=? v = maybe [] (\v' -> [k .= v']) v
 
+objectUnion :: Value -> Value -> Value
+objectUnion (Object v) (Object v') = Object $ HashMap.union v v'
+objectUnion _ _ = object []
+
 instance ToJSON TrassConfig where
-  toJSON TrassConfig{..} = object $ concat
-    [ "dist"          .=? trassConfigDist
-    , "release"       .=? trassConfigRelease
-    , "arch"          .=? trassConfigArch
-    , [ "env"         .=  trassConfigEnvironment
-      , "prepare"     .=  trassConfigPrepare
-      , "user"        .=  trassConfigUser
-      , "submission"  .=  trassConfigSubmission ] ]
+  toJSON TrassConfig{..} = objectUnion
+    (object $ concat
+      [ "dist"          .=? trassConfigDist
+      , "release"       .=? trassConfigRelease
+      , "arch"          .=? trassConfigArch
+      , [ "env"         .=  trassConfigEnvironment
+        , "prepare"     .=  trassConfigPrepare
+        , "user"        .=  trassConfigUser ]
+      , "task_dir"      .=? trassConfigTaskDir ] )
+    (toJSON trassConfigSubmission)
 
 instance ToJSON TrassSubmissionConfig where
-  toJSON TrassSubmissionConfig{..} = object
-    [ "prepare"   .= trassSubmissionConfigPrepare
-    , "validate"  .= trassSubmissionConfigValidate
-    , "install"   .= trassSubmissionConfigInstall
-    , "script"    .= trassSubmissionConfigScript ]
+  toJSON TrassSubmissionConfig{..} = object $ concat
+    [ "submit_file"     .=? trassSubmissionConfigFile
+    , "submit_dir"      .=? trassSubmissionConfigDir
+    , "before_install"  .=? trassSubmissionConfigBeforeInstall
+    , "install"         .=? trassSubmissionConfigInstall
+    , "before_script"   .=? trassSubmissionConfigBeforeScript
+    , "script"          .=? trassSubmissionConfigScript
+    , "after_success"   .=? trassSubmissionConfigAfterSuccess
+    , "after_failure"   .=? trassSubmissionConfigAfterFailure
+    , "after_script"    .=? trassSubmissionConfigAfterScript ]
 
 instance ToJSON TrassUserConfig where
   toJSON TrassUserConfig{..} = object $ concat
@@ -276,15 +306,28 @@ attachMany env user (Commands (cmd:cmds)) = do
     Just ExitSuccess -> attachMany env user (Commands cmds)
     _ -> return mc
 
-copyToContainer :: FilePath -> FilePath -> LXC ()
-copyToContainer hostPath containerPath = do
+hostToContainer :: CreateProcess -> String -> LXC ()
+hostToContainer hostProc containerCmd = do
   outFd <- liftIO $ do
-    (_, Just hout, _, _) <- createProcess (proc "tar" ["zcf", "-", hostPath]){ std_out = CreatePipe }
+    (_, Just hout, _, _) <- createProcess hostProc { std_out = CreatePipe }
     handleToFd hout
   attachRunWait
     defaultAttachOptions { attachStdinFD = outFd }
-    "sh" ["sh", "-c", "tar zxf - -O >" ++ containerPath]
+    "sh" ["sh", "-c", containerCmd]
   return ()
+
+fileToFile :: FilePath -> FilePath -> LXC ()
+fileToFile from to = hostToContainer (proc "cat" [from]) ("cat >" ++ to)
+
+dirToDir :: FilePath -> FilePath -> LXC ()
+dirToDir from to = hostToContainer
+  (proc "tar" ["-p", "-C", from, "-zcf", "-", "."])
+  ("mkdir -p " ++ show to ++ " && tar -p -C " ++ show to ++ " -zxf -")
+
+archiveToDir :: FilePath -> FilePath -> LXC ()
+archiveToDir from to = hostToContainer
+  (proc "cat" [from])
+  ("mkdir -p " ++ show to ++ " && tar -p -C " ++ show to ++ " -zxf -")
 
 prepareContainer :: TrassConfig -> LXC Bool
 prepareContainer TrassConfig{..} = do
@@ -307,3 +350,55 @@ prepareContainer TrassConfig{..} = do
       wait ContainerStopped (-1)
 
       return True
+
+submit :: Container -> FilePath -> FilePath -> TrassConfig -> IO (Maybe ExitCode)
+submit base submitFile taskDir TrassConfig{..} = do
+  let TrassSubmissionConfig{..} = trassConfigSubmission
+  withTemporaryDirectory "submission." $ \tempdir -> do
+    setFileMode tempdir accessModes
+    mc <- withContainer base $ clone Nothing (Just tempdir) [CloneSnapshot] Nothing Nothing Nothing []
+    case mc of
+      Nothing   -> return Nothing
+      Just temp -> withContainer temp $ do
+        liftIO $ print temp
+        liftIO $ putStrLn "starting"
+        start False []
+        wait ContainerRunning (-1)
+        liftIO $ putStrLn "started"
+
+        let homeDir     = fromMaybe "" $ trassUserConfigHome trassConfigUser
+            taskDir'    = fromMaybe "trass_task_dir"    trassConfigTaskDir
+            submitFile' = fromMaybe "trass_submit_file" trassSubmissionConfigFile
+
+        liftIO $ putStrLn "copying task dir"
+        dirToDir   taskDir    $ homeDir </> taskDir'
+
+        liftIO $ putStrLn "copying submission file"
+        fileToFile submitFile $ homeDir </> taskDir' </> submitFile'
+
+        liftIO $ putStrLn "copied files"
+
+        let env  = getCommands trassConfigEnvironment <> [TextValue $ "USER=" <> fromMaybe "root" (trassUserConfigUsername trassConfigUser)]
+            env' = map (Text.unpack . getTextValue) env
+            attachMany' = attachMany env' trassConfigUser { trassUserConfigHome = (</> taskDir') <$> trassUserConfigHome trassConfigUser }
+
+        mcode <- attachMany' . mconcat . map (fromMaybe mempty) $
+                    [ trassSubmissionConfigBeforeInstall
+                    , trassSubmissionConfigInstall
+                    , trassSubmissionConfigBeforeScript
+                    , trassSubmissionConfigScript ]
+
+        case mcode of
+          Just code -> do
+            attachMany' . fromMaybe mempty $
+              case code of
+                ExitSuccess -> trassSubmissionConfigAfterSuccess
+                _           -> trassSubmissionConfigAfterFailure
+            attachMany' $ fromMaybe mempty trassSubmissionConfigAfterScript
+          _ -> return Nothing
+
+        stop
+        wait ContainerStopped (-1)
+        destroy
+        return mcode
+
