@@ -19,6 +19,18 @@ library
   default-language:   Haskell2010
   exposed-modules:
     Trass
+    Trass.Config
+    Trass.Config.Command
+    Trass.Config.Options
+    Trass.Config.Submission
+    Trass.Config.User
+    Trass.Config.Util
+  default-extensions:
+    RecordWildCards
+    FlexibleInstances
+    FlexibleContexts
+    OverloadedStrings
+    NoMonomorphismRestriction
   build-depends:      base          >=4.7   &&  <4.8
                     , containers
                     , unordered-containers
