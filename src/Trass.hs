@@ -351,8 +351,8 @@ prepareContainer TrassConfig{..} = do
 
       return True
 
-submit :: Container -> FilePath -> FilePath -> TrassConfig -> IO (Maybe ExitCode)
-submit base submitFile taskDir TrassConfig{..} = do
+submit :: Container -> FilePath -> [FilePath] -> TrassConfig -> IO (Maybe ExitCode)
+submit base submitFile taskDirs TrassConfig{..} = do
   let TrassSubmissionConfig{..} = trassConfigSubmission
   withTemporaryDirectory "submission." $ \tempdir -> do
     setFileMode tempdir accessModes
@@ -367,19 +367,25 @@ submit base submitFile taskDir TrassConfig{..} = do
             taskDir'    = fromMaybe "trass_task_dir"    trassConfigTaskDir
             submitFile' = fromMaybe "trass_submit_file" trassSubmissionConfigFile
 
-        dirToDir   taskDir    $ homeDir </> taskDir'
+        -- merge and copy multiple task directories
+        forM_ taskDirs $ \taskDir -> do
+          dirToDir taskDir $ homeDir </> taskDir'
+        -- copy submitted file
         fileToFile submitFile $ homeDir </> taskDir' </> submitFile'
 
+        -- set environment
         let env  = getCommands trassConfigEnvironment <> [TextValue $ "USER=" <> fromMaybe "root" (trassUserConfigUsername trassConfigUser)]
             env' = map (Text.unpack . getTextValue) env
             attachMany' = attachMany env' trassConfigUser { trassUserConfigHome = (</> taskDir') <$> trassUserConfigHome trassConfigUser }
 
+        -- run commands
         mcode <- attachMany' . mconcat . map (fromMaybe mempty) $
                     [ trassSubmissionConfigBeforeInstall
                     , trassSubmissionConfigInstall
                     , trassSubmissionConfigBeforeScript
                     , trassSubmissionConfigScript ]
 
+        -- run after* commands
         case mcode of
           Just code -> do
             attachMany' . fromMaybe mempty $
