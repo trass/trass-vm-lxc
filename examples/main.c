@@ -1,3 +1,4 @@
+/* This is an example of a complete submission file */
 #include <stdio.h>
 
 int main(void) {

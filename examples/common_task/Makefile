@@ -6,4 +6,5 @@ main: main.c
 .PHONY: test
 
 test:
-	./main
+	./main <test.in >temp.out
+	cmp test.out temp.out
