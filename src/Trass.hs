@@ -360,23 +360,15 @@ submit base submitFile taskDir TrassConfig{..} = do
     case mc of
       Nothing   -> return Nothing
       Just temp -> withContainer temp $ do
-        liftIO $ print temp
-        liftIO $ putStrLn "starting"
         start False []
         wait ContainerRunning (-1)
-        liftIO $ putStrLn "started"
 
         let homeDir     = fromMaybe "" $ trassUserConfigHome trassConfigUser
             taskDir'    = fromMaybe "trass_task_dir"    trassConfigTaskDir
             submitFile' = fromMaybe "trass_submit_file" trassSubmissionConfigFile
 
-        liftIO $ putStrLn "copying task dir"
         dirToDir   taskDir    $ homeDir </> taskDir'
-
-        liftIO $ putStrLn "copying submission file"
         fileToFile submitFile $ homeDir </> taskDir' </> submitFile'
-
-        liftIO $ putStrLn "copied files"
 
         let env  = getCommands trassConfigEnvironment <> [TextValue $ "USER=" <> fromMaybe "root" (trassUserConfigUsername trassConfigUser)]
             env' = map (Text.unpack . getTextValue) env
