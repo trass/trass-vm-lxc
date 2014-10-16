@@ -72,6 +72,11 @@ instance ToJSON m => ToJSON (Configuration m) where
     , "global"  .= configurationGlobal
     ]
 
+instance ToJSON m => ToJSON (ConfigWithOptions m) where
+  toJSON ConfigWithOptions{..} = objectUnion
+    (toJSON configWithOptionsOptions)
+    (toJSON configWithOptionsConfig)
+
 mergeOptions :: Monoid m => Options m -> Options m -> Options m
 mergeOptions = Map.unionWith (Map.unionWith (<>))
 
