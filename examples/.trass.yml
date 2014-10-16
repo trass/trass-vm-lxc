@@ -44,6 +44,8 @@ options:
           - sudo apt-get install python ruby
           # Version control
           - sudo apt-get install git mercurial darcs subversion
+          # Libraries
+          - sudo apt-get install libgmp3-dev
           # Utilities
           - sudo apt-get install tar
           # add ~/.bin to PATH
@@ -86,8 +88,16 @@ options:
             default:
               ghc: 7.8
             global:
+              prepare:
+                cabal install hspec
+                cabal install ChasingBottoms
               submit_file: Main.hs
-              install: cabal install --only-dependencies --enable-tests
+              before_install:
+                - cabal --version
+                - ghc --version
+              install:
+                - cabal update
+                - cabal install --only-dependencies --enable-tests
               script: cabal configure --enable-tests && cabal build && cabal test
             options:
               ghc:
@@ -95,7 +105,9 @@ options:
                   - wget https://www.haskell.org/platform/download/2014.2.0.0/haskell-platform-2014.2.0.0-unknown-linux-x86_64.tar.gz -O haskell-platform.tar.gz
                   - cd /
                   - sudo tar xvf ~/haskell-platform.tar.gz
-                  - sudo /usr/local/haskell/ghc-7.8.3-x86-64/bin/activate-hs
+                  - sudo /usr/local/haskell/ghc-7.8.3-x86_64/bin/activate-hs
+                  - cd
+                  - rm haskell-platform.tar.gz
                 7.6:
                   - sudo apt-get install haskell-platform=2013.2.0.0.debian3
 
