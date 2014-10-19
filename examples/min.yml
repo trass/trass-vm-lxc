@@ -17,14 +17,14 @@ options:
           # do not require sudo password
           - echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
           # autosave and autorestore last used directory
-          - echo 'pwd > ~/.lastdirectory' >> /home/ubuntu/.bash_logout
           - echo '[ -s ~/.lastdirectory ] && cd `cat ~/.lastdirectory`' >> /home/ubuntu/.profile
+          - echo 'trap "pwd > ~/.lastdirectory" EXIT'                   >> /home/ubuntu/.profile
           - echo '/home/ubuntu' > /home/ubuntu/.lastdirectory
           - chown ubuntu:ubuntu /home/ubuntu/.lastdirectory
           - echo 'HOME=/home/ubuntu' >> /etc/profile
 
       prepare:
-          - sudo echo 'DEBIAN_FRONTEND=noninteractive' >> /etc/profile
+        - sudo sh -c "echo 'DEBIAN_FRONTEND=noninteractive' >> /etc/profile"
 
       submit_file: main.c
       script: ./configure && make && make test
