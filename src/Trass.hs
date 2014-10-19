@@ -76,15 +76,19 @@ instance MonadVM LXC.LXC where
     (TextValue . Text.pack $ "mkdir -p " ++ show to ++ " && tar -p -C " ++ show to ++ " -zxf -")
 
   execute env user wd cmd = do
-    let run   = LXC.attachRunWait LXC.defaultAttachOptions { LXC.attachExtraEnvVars = env }
-        cmd'  = Text.unpack (getTextValue cmd)
-        cmd'' = case wd of
-                  Nothing   -> cmd'
-                  Just path -> "cd " <> show path <> " && (" <> cmd' <> ")"
-    liftIO $ putStrLn $ maybe "# " (const "$ ") user ++ cmd''
-    case user of
-      Nothing   -> run "sh" [ "sh", "-c", cmd'' ]
-      Just name -> run "su" [ "su", "-m", "-l", name, "-c", cmd'' ]
+    case wd of
+      Nothing   -> return ()
+      Just path -> do
+        exec $ "cd " ++ show path
+        return ()
+    exec $ Text.unpack $ getTextValue cmd
+    where
+      run = LXC.attachRunWait LXC.defaultAttachOptions { LXC.attachExtraEnvVars = env }
+      exec sh = do
+        liftIO $ putStrLn $ maybe "# " (const "$ ") user ++ sh
+        case user of
+          Nothing   -> run "sh" [ "sh", "-c", sh ]
+          Just name -> run "su" [ "su", "-m", "-l", name, "-c", sh ]
 
 hostToLXC :: CreateProcess -> Command -> LXC.LXC (Maybe ExitCode)
 hostToLXC hostProc lxcCmd = do
