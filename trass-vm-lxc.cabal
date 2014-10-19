@@ -2,8 +2,8 @@ name:                trass-vm-lxc
 version:             0.1
 synopsis:            LXC as VM for TRASS.
 -- description:
-homepage:            https://github.com/fizruk/trass-vm-lxc
-bug-reports:         https://github.com/fizruk/trass-vm-lxc/issues
+homepage:            https://github.com/trass/trass-vm-lxc
+bug-reports:         https://github.com/trass/trass-vm-lxc/issues
 license:             BSD3
 license-file:        LICENSE
 author:              Nickolay Kudasov
@@ -36,5 +36,5 @@ library
 
 source-repository head
   type: git
-  location: https://github.com/fizruk/trass-vm-lxc.git
+  location: https://github.com/trass/trass-vm-lxc.git
   branch: master
