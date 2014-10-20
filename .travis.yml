@@ -9,5 +9,4 @@ before_install:
     # get trass-config and trass-vm from sources
   - git clone https://github.com/trass/trass-config.git
   - git clone https://github.com/trass/trass-vm.git
-  - ghc-pkg list
-  - cabal install trass-config/ trass-vm/
+  - cabal install --force-reinstalls trass-config/ trass-vm/
